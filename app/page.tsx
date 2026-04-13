@@ -392,8 +392,17 @@ export default function Home() {
       setStatusMessage('جاري تجهيز الفيديو...');
 
       const outputData = await ffmpeg.readFile('output.mp4');
-      const outputArray = outputData instanceof Uint8Array ? outputData : new TextEncoder().encode(String(outputData));
-      const outputBlob = new Blob([outputArray], { type: 'video/mp4' });
+      let outputArray: Uint8Array;
+      if (outputData instanceof Uint8Array) {
+        // Create a copy to avoid SharedArrayBuffer issues
+        const copy = new ArrayBuffer(outputData.byteLength);
+        const view = new Uint8Array(copy);
+        view.set(outputData);
+        outputArray = view;
+      } else {
+        outputArray = new TextEncoder().encode(String(outputData));
+      }
+      const outputBlob = new Blob([outputArray as BlobPart], { type: 'video/mp4' });
       const url = URL.createObjectURL(outputBlob);
 
       setVideoUrl(url);
