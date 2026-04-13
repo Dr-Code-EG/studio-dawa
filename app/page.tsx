@@ -331,11 +331,11 @@ export default function Home() {
           source.start(audioContext.currentTime);
         }
 
-        // Draw frames
+        // Draw frames using setTimeout (works in headless, unlike rAF)
         const startTime = performance.now();
 
         await new Promise<void>((resolve) => {
-          const draw = () => {
+          const drawFrame_loop = () => {
             const elapsed = performance.now() - startTime;
             const t = elapsed / 1000;
             const ayahDurSec = durationMs / 1000;
@@ -358,9 +358,12 @@ export default function Home() {
             }
 
             drawFrame(ctx, width, height, bgImg, ayah.text, opacity);
-            requestAnimationFrame(draw);
+
+            // Use setTimeout instead of rAF for headless compatibility
+            // 33ms ≈ 30fps
+            setTimeout(drawFrame_loop, 33);
           };
-          draw();
+          drawFrame_loop();
         });
 
         totalTimeMs += durationMs;
