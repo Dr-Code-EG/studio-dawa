@@ -244,12 +244,14 @@ export default function Home() {
         setProgress(20 + (i / ayahs.length) * 20);
 
         const duration = await fetchAyahDuration(ayah.audioUrl!);
+        console.log(`Audio ${i+1}: ${ayah.audioUrl} -> ${duration}ms`);
         audioData.push({
           url: ayah.audioUrl!,
           duration,
           text: ayah.text || 'بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ',
         });
       }
+      console.log('All audio durations fetched, proceeding to canvas...');
 
       // Create canvas
       setStatusMessage('جاري إنشاء الفيديو...');
@@ -260,8 +262,14 @@ export default function Home() {
       canvas.height = height;
       const ctx = canvas.getContext('2d')!;
 
+      console.log('Canvas created:', width, 'x', height);
+
       // Setup audio context
       const audioContext = new AudioContext();
+      if (audioContext.state === 'suspended') {
+        await audioContext.resume();
+        console.log('AudioContext resumed');
+      }
       const dest = audioContext.createMediaStreamDestination();
       const canvasStream = canvas.captureStream(30);
 
@@ -277,6 +285,8 @@ export default function Home() {
           ? 'video/webm;codecs=vp8'
           : 'video/webm';
 
+      console.log('MediaRecorder mimeType:', mimeType);
+
       const recorder = new MediaRecorder(combinedStream, {
         mimeType,
         videoBitsPerSecond: 5000000,
@@ -285,9 +295,11 @@ export default function Home() {
       const chunks: Blob[] = [];
       recorder.ondataavailable = (e) => {
         if (e.data.size > 0) chunks.push(e.data);
+        console.log('Data chunk:', e.data.size, 'bytes, total:', chunks.length);
       };
 
       recorder.start();
+      console.log('MediaRecorder started');
 
       // Render each ayah sequentially
       let totalTimeMs = 0;
@@ -297,6 +309,7 @@ export default function Home() {
         const durationMs = ayah.duration;
         const fadeDurationMs = settings.enableFade ? settings.fadeDuration : 0;
 
+        console.log(`Rendering ayah ${i+1}: duration=${durationMs}ms, text="${ayah.text.substring(0, 30)}..."`);
         setStatusMessage(`جاري رسم الآية ${i + 1} من ${audioData.length}...`);
         setProgress(50 + (i / audioData.length) * 35);
 
@@ -305,25 +318,14 @@ export default function Home() {
         try {
           const audioResponse = await fetch(ayah.url);
           if (!audioResponse.ok) {
-            throw new Error(`HTTP ${audioResponse.status} for ${ayah.url}`);
-          }
-          const contentType = audioResponse.headers.get('content-type') || '';
-          if (!contentType.includes('audio') && !contentType.includes('octet-stream')) {
-            // Might be an error page
-            const text = await audioResponse.text();
-            throw new Error(`Unexpected content-type: ${contentType}, response: ${text.substring(0, 100)}`);
+            throw new Error(`HTTP ${audioResponse.status}`);
           }
           const audioBuffer = await audioResponse.arrayBuffer();
-          
-          // Ensure audio context is running
-          if (audioContext.state === 'suspended') {
-            await audioContext.resume();
-          }
-          
+          console.log(`Fetched audio ${i+1}: ${audioBuffer.byteLength} bytes`);
           decodedAudio = await audioContext.decodeAudioData(audioBuffer);
+          console.log(`Decoded audio ${i+1}: ${decodedAudio.duration.toFixed(1)}s`);
         } catch (decodeErr) {
-          console.warn(`Audio decode failed for ayah ${i + 1}:`, decodeErr);
-          // Continue without audio for this ayah
+          console.warn(`Audio decode failed for ayah ${i + 1}:`, decodeErr.message);
         }
 
         if (decodedAudio) {
@@ -333,8 +335,9 @@ export default function Home() {
           source.start(audioContext.currentTime);
         }
 
-        // Draw frames using setTimeout (works in headless, unlike rAF)
+        // Draw frames using setTimeout
         const startTime = performance.now();
+        console.log(`Starting draw loop for ayah ${i+1}, duration: ${durationMs}ms`);
 
         await new Promise<void>((resolve) => {
           const drawFrame_loop = () => {
@@ -344,11 +347,11 @@ export default function Home() {
             const fadeSec = fadeDurationMs / 1000;
 
             if (t >= ayahDurSec) {
+              console.log(`Draw loop finished for ayah ${i+1} at ${elapsed}ms`);
               resolve();
               return;
             }
 
-            // Fade in/out
             let opacity = 1;
             if (settings.enableFade && fadeSec > 0) {
               if (t < fadeSec) {
@@ -360,9 +363,6 @@ export default function Home() {
             }
 
             drawFrame(ctx, width, height, bgImg, ayah.text, opacity);
-
-            // Use setTimeout instead of rAF for headless compatibility
-            // 33ms ≈ 30fps
             setTimeout(drawFrame_loop, 33);
           };
           drawFrame_loop();
@@ -370,6 +370,9 @@ export default function Home() {
 
         totalTimeMs += durationMs;
       }
+
+      console.log(`All ayahs rendered. Total time: ${totalTimeMs}ms`);
+      console.log(`Chunks collected: ${chunks.length}`);
 
       // Stop recording
       recorder.stop();
