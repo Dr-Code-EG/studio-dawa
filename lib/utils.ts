@@ -60,52 +60,30 @@ export async function fetchAyahs(
 }
 
 export async function fetchAyahDuration(audioUrl: string): Promise<number> {
-  // Use fetch + AudioContext for more reliable duration detection
-  // with a timeout fallback
+  // Use fetch + AudioContext with timeout - no Audio element fallback
+  // (Audio element can hang in some environments)
+  const TIMEOUT = 8000;
+
   return new Promise((resolve) => {
-    const timeout = setTimeout(() => {
-      // Default duration based on typical ayah length
-      resolve(5000);
-    }, 10000); // 10 second timeout
+    const timer = setTimeout(() => resolve(5000), TIMEOUT);
 
-    // Try fetch-based approach first (more reliable in headless)
     fetch(audioUrl)
-      .then(response => {
+      .then(async (response) => {
         if (!response.ok) throw new Error('HTTP ' + response.status);
-        return response.arrayBuffer();
-      })
-      .then(arrayBuffer => {
-        // Create a temporary audio context to get duration
+        const arrayBuffer = await response.arrayBuffer();
+        if (arrayBuffer.byteLength === 0) throw new Error('Empty response');
+
         const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
-        return ctx.decodeAudioData(arrayBuffer).then(audioBuffer => {
-          const duration = audioBuffer.duration * 1000;
-          ctx.close();
-          clearTimeout(timeout);
-          resolve(duration);
-        });
+        const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
+        const duration = audioBuffer.duration * 1000;
+        ctx.close();
+        clearTimeout(timer);
+        resolve(Math.max(duration, 500)); // Minimum 500ms
       })
-      .catch(() => {
-        // Fallback: try Audio element
-        const audio = new Audio();
-        audio.crossOrigin = 'anonymous';
-
-        const onLoadedMetadata = () => {
-          clearTimeout(timeout);
-          resolve(audio.duration * 1000);
-          audio.removeEventListener('loadedmetadata', onLoadedMetadata);
-          audio.removeEventListener('error', onError);
-        };
-
-        const onError = () => {
-          clearTimeout(timeout);
-          resolve(5000);
-          audio.removeEventListener('loadedmetadata', onLoadedMetadata);
-          audio.removeEventListener('error', onError);
-        };
-
-        audio.addEventListener('loadedmetadata', onLoadedMetadata);
-        audio.addEventListener('error', onError);
-        audio.src = audioUrl;
+      .catch((err) => {
+        console.warn('Audio duration fetch failed:', audioUrl, err.message);
+        clearTimeout(timer);
+        resolve(5000); // Default 5 seconds
       });
   });
 }
