@@ -41,7 +41,8 @@ export default function Home() {
   const [statusMessage, setStatusMessage] = useState('');
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [ffmpegLoaded, setFfmpegLoaded] = useState(false);
+  // Note: FFmpeg requires SharedArrayBuffer which needs COOP/COEP headers
+  // We use Canvas + MediaRecorder as the primary approach
 
   const ffmpegRef = useRef<FFmpeg | null>(null);
 
@@ -59,9 +60,8 @@ export default function Home() {
     setSurahAyahsCount(ayahsCount);
   }, []);
 
-  // Load FFmpeg
+  // Load FFmpeg (optional - only used for webm->mp4 conversion)
   const loadFFmpeg = async () => {
-    if (ffmpegLoaded) return true;
     try {
       setStatusMessage('جاري تحميل محرك الفيديو...');
       const ffmpeg = new FFmpeg();
@@ -73,11 +73,9 @@ export default function Home() {
         wasmURL: '/ffmpeg-core.wasm',
       });
       ffmpegRef.current = ffmpeg;
-      setFfmpegLoaded(true);
       return true;
     } catch (err) {
       console.error('FFmpeg load error:', err);
-      setError('فشل تحميل محرك الفيديو. تأكد من أن المتصفح يدعم SharedArrayBuffer.');
       return false;
     }
   };
@@ -357,55 +355,55 @@ export default function Home() {
       // Create webm blob
       const webmBlob = new Blob(chunks, { type: mimeType });
 
-      // Use FFmpeg to convert to mp4
-      const loaded = await loadFFmpeg();
-      if (!loaded) {
-        // Still offer the webm
+      // Use FFmpeg to convert to mp4 (optional)
+      try {
+        const loaded = await loadFFmpeg();
+        if (loaded) {
+          const ffmpeg = ffmpegRef.current!;
+          const webmData = await fetchFile(webmBlob);
+          await ffmpeg.writeFile('input.webm', webmData);
+
+          setStatusMessage('جاري التحويل إلى MP4...');
+          setProgress(92);
+
+          await ffmpeg.exec([
+            '-i', 'input.webm',
+            '-c:v', 'libx264',
+            '-preset', 'ultrafast',
+            '-crf', '23',
+            '-c:a', 'aac',
+            '-b:a', '128k',
+            '-movflags', '+faststart',
+            '-y',
+            'output.mp4',
+          ]);
+
+          setProgress(97);
+          setStatusMessage('جاري تجهيز الفيديو...');
+
+          const outputData = await ffmpeg.readFile('output.mp4');
+          let outputArray: Uint8Array;
+          if (outputData instanceof Uint8Array) {
+            const copy = new ArrayBuffer(outputData.byteLength);
+            const view = new Uint8Array(copy);
+            view.set(outputData);
+            outputArray = view;
+          } else {
+            outputArray = new TextEncoder().encode(String(outputData));
+          }
+          const outputBlob = new Blob([outputArray as BlobPart], { type: 'video/mp4' });
+          const url = URL.createObjectURL(outputBlob);
+          setVideoUrl(url);
+        } else {
+          // FFmpeg failed, offer webm directly
+          const url = URL.createObjectURL(webmBlob);
+          setVideoUrl(url);
+        }
+      } catch (ffmpegErr) {
+        console.warn('FFmpeg conversion failed, offering webm:', ffmpegErr);
         const url = URL.createObjectURL(webmBlob);
         setVideoUrl(url);
-        setProgress(100);
-        setStatusMessage('تم (بدون تحويل MP4) ✅');
-        setIsGenerating(false);
-        return;
       }
-
-      const ffmpeg = ffmpegRef.current!;
-      const webmData = await fetchFile(webmBlob);
-      await ffmpeg.writeFile('input.webm', webmData);
-
-      setStatusMessage('جاري التحويل إلى MP4...');
-      setProgress(92);
-
-      await ffmpeg.exec([
-        '-i', 'input.webm',
-        '-c:v', 'libx264',
-        '-preset', 'ultrafast',
-        '-crf', '23',
-        '-c:a', 'aac',
-        '-b:a', '128k',
-        '-movflags', '+faststart',
-        '-y',
-        'output.mp4',
-      ]);
-
-      setProgress(97);
-      setStatusMessage('جاري تجهيز الفيديو...');
-
-      const outputData = await ffmpeg.readFile('output.mp4');
-      let outputArray: Uint8Array;
-      if (outputData instanceof Uint8Array) {
-        // Create a copy to avoid SharedArrayBuffer issues
-        const copy = new ArrayBuffer(outputData.byteLength);
-        const view = new Uint8Array(copy);
-        view.set(outputData);
-        outputArray = view;
-      } else {
-        outputArray = new TextEncoder().encode(String(outputData));
-      }
-      const outputBlob = new Blob([outputArray as BlobPart], { type: 'video/mp4' });
-      const url = URL.createObjectURL(outputBlob);
-
-      setVideoUrl(url);
       setProgress(100);
       setStatusMessage('تم بنجاح! ✅');
 
