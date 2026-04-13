@@ -69,8 +69,8 @@ export default function Home() {
         console.log('[FFmpeg]', message);
       });
       await ffmpeg.load({
-        coreURL: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js',
-        wasmURL: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm',
+        coreURL: '/ffmpeg-core.js',
+        wasmURL: '/ffmpeg-core.wasm',
       });
       ffmpegRef.current = ffmpeg;
       setFfmpegLoaded(true);
