@@ -171,12 +171,20 @@ export default function Home() {
       // Write background
       const bg = settings.backgrounds[0];
       const bgData = await fetchFile(bg.file);
-      
+
       if (bg.isVideo) {
         await ffmpeg.writeFile('background.mp4', bgData);
       } else {
         await ffmpeg.writeFile('background.png', bgData);
       }
+
+      // Load Arabic font into FFmpeg virtual filesystem
+      setStatusMessage('جاري تحميل الخط العربي...');
+      setProgress(65);
+
+      const fontResponse = await fetch('/NotoNaskhArabic.ttf');
+      const fontArrayBuffer = await fontResponse.arrayBuffer();
+      await ffmpeg.writeFile('NotoNaskhArabic.ttf', new Uint8Array(fontArrayBuffer));
 
       // Build filter complex and concat
       setStatusMessage('جاري إنشاء الفيديو...');
@@ -224,7 +232,7 @@ export default function Home() {
         const fontSize = Math.round(settings.fontSize * (height / 1080));
         const escapeText = seg.text.replace(/'/g, '').replace(/:/g, '');
 
-        let filter = `drawtext=text='${escapeText}':fontfile='/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf':fontsize=${fontSize}:fontcolor=${settings.textColor}:x=(w-text_w)/2:y=${y}:enable='between(t,${startTime},${startTime + duration})'`;
+        let filter = `drawtext=text='${escapeText}':fontfile='NotoNaskhArabic.ttf':fontsize=${fontSize}:fontcolor=${settings.textColor}:x=(w-text_w)/2:y=${y}:enable='between(t,${startTime},${startTime + duration})'`;
         
         if (settings.enableFade && fadeDuration > 0) {
           filter += `:alpha='if(lt(t,${startTime + fadeDuration}),${startTime === 0 ? 1 : `(t-${startTime})/${fadeDuration}`},if(gt(t,${startTime + duration - fadeDuration}),(${startTime + duration}-t)/${fadeDuration},1))'`;
