@@ -60,32 +60,17 @@ export async function fetchAyahs(
 }
 
 export async function fetchAyahDuration(audioUrl: string): Promise<number> {
-  // Use fetch + AudioContext with timeout - no Audio element fallback
-  // (Audio element can hang in some environments)
-  const TIMEOUT = 8000;
-
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve(5000), TIMEOUT);
-
-    fetch(audioUrl)
-      .then(async (response) => {
-        if (!response.ok) throw new Error('HTTP ' + response.status);
-        const arrayBuffer = await response.arrayBuffer();
-        if (arrayBuffer.byteLength === 0) throw new Error('Empty response');
-
-        const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
-        const audioBuffer = await ctx.decodeAudioData(arrayBuffer);
-        const duration = audioBuffer.duration * 1000;
-        ctx.close();
-        clearTimeout(timer);
-        resolve(Math.max(duration, 500)); // Minimum 500ms
-      })
-      .catch((err) => {
-        console.warn('Audio duration fetch failed:', audioUrl, err.message);
-        clearTimeout(timer);
-        resolve(5000); // Default 5 seconds
-      });
-  });
+  // Estimate duration from file size (MP3 ~16KB/s at 128kbps)
+  // Use HEAD request to get Content-Length
+  try {
+    const resp = await fetch(audioUrl, { method: 'HEAD' });
+    const contentLength = parseInt(resp.headers.get('content-length') || '0');
+    // 128kbps MP3 ≈ 16000 bytes per second
+    const estimatedSeconds = contentLength / 16000;
+    return Math.max(estimatedSeconds * 1000, 1000); // Min 1 second
+  } catch {
+    return 5000; // Default 5 seconds
+  }
 }
 
 export function getQualityDimensions(quality: string, width: number, height: number) {

@@ -270,10 +270,12 @@ export default function Home() {
         ...dest.stream.getAudioTracks(),
       ]);
 
-      // MediaRecorder
+      // MediaRecorder - record at 30fps
       const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
         ? 'video/webm;codecs=vp9'
-        : 'video/webm';
+        : MediaRecorder.isTypeSupported('video/webm;codecs=vp8')
+          ? 'video/webm;codecs=vp8'
+          : 'video/webm';
 
       const recorder = new MediaRecorder(combinedStream, {
         mimeType,
