@@ -14,8 +14,8 @@ import WatermarkOverlay from '@/components/WatermarkOverlay';
 import { defaultSettings, videoPresets } from '@/lib/data';
 import type { VideoSettings, BackgroundFile, AyahData } from '@/lib/types';
 import { fetchAyahs, fetchAyahDuration, getAyahAudioUrl } from '@/lib/utils';
-import { 
-  Download, Loader2, Sparkles, BookOpen, Play, Settings, 
+import {
+  Download, Loader2, Sparkles, BookOpen, Play, Settings,
   ImagePlus, Type, Wand2, Droplets, Monitor, CheckCircle,
   AlertCircle
 } from 'lucide-react';
@@ -42,7 +42,7 @@ export default function Home() {
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [ffmpegLoaded, setFfmpegLoaded] = useState(false);
-  
+
   const ffmpegRef = useRef<FFmpeg | null>(null);
 
   const updateSettings = useCallback((updates: Partial<VideoSettings>) => {
@@ -50,8 +50,8 @@ export default function Home() {
   }, []);
 
   const handleSurahSelect = useCallback((surahNumber: number, ayahsCount: number) => {
-    setSettings((prev) => ({ 
-      ...prev, 
+    setSettings((prev) => ({
+      ...prev,
       surahNumber,
       ayahFrom: 1,
       ayahTo: Math.min(ayahsCount, prev.ayahTo),
@@ -62,32 +62,125 @@ export default function Home() {
   // Load FFmpeg
   const loadFFmpeg = async () => {
     if (ffmpegLoaded) return true;
-    
     try {
       setStatusMessage('جاري تحميل محرك الفيديو...');
       const ffmpeg = new FFmpeg();
-      
+      ffmpeg.on('log', ({ message }: any) => {
+        console.log('[FFmpeg]', message);
+      });
       await ffmpeg.load({
         coreURL: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js',
         wasmURL: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm',
       });
-      
       ffmpegRef.current = ffmpeg;
       setFfmpegLoaded(true);
       return true;
     } catch (err) {
       console.error('FFmpeg load error:', err);
+      setError('فشل تحميل محرك الفيديو. تأكد من أن المتصفح يدعم SharedArrayBuffer.');
       return false;
     }
   };
 
-  // Generate video
+  // Draw a single frame on canvas
+  const drawFrame = useCallback((
+    ctx: CanvasRenderingContext2D,
+    width: number,
+    height: number,
+    bgImg: HTMLImageElement | null,
+    text: string,
+    opacity: number,
+  ) => {
+    ctx.globalAlpha = 1;
+    if (bgImg) {
+      const imgRatio = bgImg.width / bgImg.height;
+      const canvasRatio = width / height;
+      let drawW: number, drawH: number, drawX: number, drawY: number;
+      if (imgRatio > canvasRatio) {
+        drawH = height;
+        drawW = height * imgRatio;
+        drawX = (width - drawW) / 2;
+        drawY = 0;
+      } else {
+        drawW = width;
+        drawH = width / imgRatio;
+        drawX = 0;
+        drawY = (height - drawH) / 2;
+      }
+      ctx.drawImage(bgImg, drawX, drawY, drawW, drawH);
+      // Dark overlay
+      ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+      ctx.fillRect(0, 0, width, height);
+    } else {
+      const gradient = ctx.createLinearGradient(0, 0, 0, height);
+      gradient.addColorStop(0, '#0f172a');
+      gradient.addColorStop(0.5, '#1e293b');
+      gradient.addColorStop(1, '#0f172a');
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, width, height);
+    }
+
+    // Text
+    ctx.globalAlpha = opacity;
+    let y: number;
+    if (settings.textPosition === 'top') {
+      y = height * 0.2;
+    } else if (settings.textPosition === 'bottom') {
+      y = height * 0.75;
+    } else {
+      y = height * 0.5;
+    }
+
+    const fontSize = Math.round(settings.fontSize * (height / 1080));
+    ctx.font = `${fontSize}px "Noto Naskh Arabic", "Amiri", "Arial", sans-serif`;
+    ctx.fillStyle = settings.textColor;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.direction = 'rtl';
+
+    // Word wrap
+    const maxWidth = width * 0.85;
+    const lineHeight = fontSize * 1.6;
+    const words = text.split(' ');
+    const lines: string[] = [];
+    let currentLine = '';
+    for (const word of words) {
+      const testLine = currentLine ? currentLine + ' ' + word : word;
+      const metrics = ctx.measureText(testLine);
+      if (metrics.width > maxWidth) {
+        if (currentLine) lines.push(currentLine);
+        currentLine = word;
+      } else {
+        currentLine = testLine;
+      }
+    }
+    if (currentLine) lines.push(currentLine);
+
+    const totalTextHeight = lines.length * lineHeight;
+    let startY = y - totalTextHeight / 2 + lineHeight / 2;
+    for (const line of lines) {
+      ctx.fillText(line, width / 2, startY, maxWidth);
+      startY += lineHeight;
+    }
+
+    // Watermark
+    if (settings.showWatermark && settings.watermarkText) {
+      ctx.globalAlpha = 0.3;
+      ctx.font = `${Math.round(fontSize * 0.35)}px "Noto Naskh Arabic", sans-serif`;
+      ctx.fillStyle = '#ffffff';
+      ctx.textAlign = 'center';
+      ctx.fillText(settings.watermarkText, width / 2, height * 0.92);
+    }
+
+    ctx.globalAlpha = 1;
+  }, [settings.textPosition, settings.fontSize, settings.textColor, settings.showWatermark, settings.watermarkText]);
+
+  // Generate video using Canvas + MediaRecorder + FFmpeg
   const generateVideo = async () => {
     if (!settings.surahNumber) {
       setError('الرجاء اختيار سورة أولاً');
       return;
     }
-
     if (settings.backgrounds.length === 0) {
       setError('الرجاء إضافة خلفية واحدة على الأقل');
       return;
@@ -99,16 +192,6 @@ export default function Home() {
     setStatusMessage('جاري تحميل بيانات الآيات...');
 
     try {
-      // Load FFmpeg
-      const loaded = await loadFFmpeg();
-      if (!loaded) {
-        setError('فشل تحميل محرك الفيديو. يرجى المحاولة مرة أخرى.');
-        setIsGenerating(false);
-        return;
-      }
-
-      const ffmpeg = ffmpegRef.current!;
-
       // Fetch ayahs
       const ayahs = await fetchAyahs(
         settings.surahNumber,
@@ -122,7 +205,6 @@ export default function Home() {
       let width = settings.videoPresetId === 'custom' ? settings.customWidth : preset.width;
       let height = settings.videoPresetId === 'custom' ? settings.customHeight : preset.height;
 
-      // Scale for quality
       if (settings.quality === '720p') {
         const scale = 720 / height;
         width = Math.round(width * scale);
@@ -133,149 +215,192 @@ export default function Home() {
         height = 2160;
       }
 
-      // Process each ayah
-      const totalAyahs = ayahs.length;
-      let currentTime = 0;
-      const segments: { audio: Blob; duration: number; text: string }[] = [];
+      // Load background as data URL to avoid CORS
+      setStatusMessage('جاري تحميل الخلفية...');
+      setProgress(10);
+
+      const bg = settings.backgrounds[0];
+      const bgDataUrl: string = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => resolve(e.target?.result as string);
+        reader.onerror = reject;
+        reader.readAsDataURL(bg.file);
+      });
+
+      const bgImg = new Image();
+      await new Promise<void>((resolve, reject) => {
+        bgImg.onload = () => resolve();
+        bgImg.onerror = reject;
+        bgImg.src = bgDataUrl;
+      });
+
+      // Fetch ayah audio data
+      setStatusMessage('جاري تحميل ملفات الصوت...');
+      setProgress(20);
+
+      const audioData: { url: string; duration: number; text: string }[] = [];
 
       for (let i = 0; i < ayahs.length; i++) {
         const ayah = ayahs[i];
-        setStatusMessage(`جاري معالجة الآية ${i + 1} من ${totalAyahs}...`);
-        setProgress(((i + 1) / totalAyahs) * 50);
+        setStatusMessage(`جاري تحميل الآية ${i + 1} من ${ayahs.length}...`);
+        setProgress(20 + (i / ayahs.length) * 20);
 
-        // Get audio duration
         const duration = await fetchAyahDuration(ayah.audioUrl!);
-        
-        // Fetch audio file
-        const audioResponse = await fetch(ayah.audioUrl!);
-        const audioBlob = await audioResponse.blob();
-
-        segments.push({
-          audio: audioBlob,
+        audioData.push({
+          url: ayah.audioUrl!,
           duration,
-          text: ayah.text,
+          text: ayah.text || 'بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ',
         });
-
-        currentTime += duration;
       }
 
-      // Write audio files to FFmpeg
-      setStatusMessage('جاري دمج الملفات...');
-      setProgress(60);
-
-      for (let i = 0; i < segments.length; i++) {
-        const data = await fetchFile(segments[i].audio);
-        await ffmpeg.writeFile(`audio_${i}.mp3`, data);
-      }
-
-      // Write background
-      const bg = settings.backgrounds[0];
-      const bgData = await fetchFile(bg.file);
-
-      if (bg.isVideo) {
-        await ffmpeg.writeFile('background.mp4', bgData);
-      } else {
-        await ffmpeg.writeFile('background.png', bgData);
-      }
-
-      // Load Arabic font into FFmpeg virtual filesystem
-      setStatusMessage('جاري تحميل الخط العربي...');
-      setProgress(65);
-
-      const fontResponse = await fetch('/NotoNaskhArabic.ttf');
-      const fontArrayBuffer = await fontResponse.arrayBuffer();
-      await ffmpeg.writeFile('NotoNaskhArabic.ttf', new Uint8Array(fontArrayBuffer));
-
-      // Build filter complex and concat
+      // Create canvas
       setStatusMessage('جاري إنشاء الفيديو...');
-      setProgress(70);
+      setProgress(50);
 
-      const totalDuration = segments.reduce((sum, s) => sum + s.duration, 0);
+      const canvas = document.createElement('canvas');
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext('2d')!;
 
-      // Create text file with ayah texts
-      for (let i = 0; i < segments.length; i++) {
-        const textContent = segments[i].text;
-        await ffmpeg.writeFile(`text_${i}.txt`, textContent);
-      }
+      // Setup audio context
+      const audioContext = new AudioContext();
+      const dest = audioContext.createMediaStreamDestination();
+      const canvasStream = canvas.captureStream(30);
 
-      // Build command
-      let videoInput: string;
-      if (bg.isVideo) {
-        videoInput = `-t ${totalDuration / 1000} -i background.mp4`;
-      } else {
-        videoInput = `-t ${totalDuration / 1000} -loop 1 -i background.png`;
-      }
+      const combinedStream = new MediaStream([
+        ...canvasStream.getVideoTracks(),
+        ...dest.stream.getAudioTracks(),
+      ]);
 
-      // Audio concat
-      let audioConcat = '';
-      for (let i = 0; i < segments.length; i++) {
-        audioConcat += `[a${i}]`;
-      }
-      audioConcat += `concat=n=${segments.length}:v=0:a=1[outa]`;
+      // MediaRecorder
+      const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
+        ? 'video/webm;codecs=vp9'
+        : 'video/webm';
 
-      // Create drawtext filters for each ayah
-      const drawtextFilters = segments.map((seg, i) => {
-        const startTime = segments.slice(0, i).reduce((sum, s) => sum + s.duration, 0) / 1000;
-        const duration = seg.duration / 1000;
-        const fadeDuration = settings.enableFade ? settings.fadeDuration / 1000 : 0;
-        
-        // Calculate text position
-        let y: number;
-        if (settings.textPosition === 'top') {
-          y = Math.round(height * 0.15);
-        } else if (settings.textPosition === 'bottom') {
-          y = Math.round(height * 0.75);
-        } else {
-          y = Math.round(height * 0.45);
-        }
-
-        const fontSize = Math.round(settings.fontSize * (height / 1080));
-        const escapeText = seg.text.replace(/'/g, '').replace(/:/g, '');
-
-        let filter = `drawtext=text='${escapeText}':fontfile='NotoNaskhArabic.ttf':fontsize=${fontSize}:fontcolor=${settings.textColor}:x=(w-text_w)/2:y=${y}:enable='between(t,${startTime},${startTime + duration})'`;
-        
-        if (settings.enableFade && fadeDuration > 0) {
-          filter += `:alpha='if(lt(t,${startTime + fadeDuration}),${startTime === 0 ? 1 : `(t-${startTime})/${fadeDuration}`},if(gt(t,${startTime + duration - fadeDuration}),(${startTime + duration}-t)/${fadeDuration},1))'`;
-        }
-
-        return filter;
+      const recorder = new MediaRecorder(combinedStream, {
+        mimeType,
+        videoBitsPerSecond: 5000000,
       });
 
-      const complexFilter = `${audioConcat};${drawtextFilters.join(';')}`;
+      const chunks: Blob[] = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunks.push(e.data);
+      };
 
-      // Execute FFmpeg
-      setStatusMessage('جاري التصدير النهائي...');
-      setProgress(85);
+      recorder.start();
+
+      // Render each ayah sequentially
+      let totalTimeMs = 0;
+
+      for (let i = 0; i < audioData.length; i++) {
+        const ayah = audioData[i];
+        const durationMs = ayah.duration;
+        const fadeDurationMs = settings.enableFade ? settings.fadeDuration : 0;
+
+        setStatusMessage(`جاري رسم الآية ${i + 1} من ${audioData.length}...`);
+        setProgress(50 + (i / audioData.length) * 35);
+
+        // Fetch and play audio
+        const audioResponse = await fetch(ayah.url);
+        const audioBuffer = await audioResponse.arrayBuffer();
+        const decodedAudio = await audioContext.decodeAudioData(audioBuffer);
+
+        const source = audioContext.createBufferSource();
+        source.buffer = decodedAudio;
+        source.connect(dest);
+        source.start(audioContext.currentTime);
+
+        // Draw frames
+        const startTime = performance.now();
+
+        await new Promise<void>((resolve) => {
+          const draw = () => {
+            const elapsed = performance.now() - startTime;
+            const t = elapsed / 1000;
+            const ayahDurSec = durationMs / 1000;
+            const fadeSec = fadeDurationMs / 1000;
+
+            if (t >= ayahDurSec) {
+              resolve();
+              return;
+            }
+
+            // Fade in/out
+            let opacity = 1;
+            if (settings.enableFade && fadeSec > 0) {
+              if (t < fadeSec) {
+                opacity = t / fadeSec;
+              } else if (t > ayahDurSec - fadeSec) {
+                opacity = (ayahDurSec - t) / fadeSec;
+              }
+              opacity = Math.max(0, Math.min(1, opacity));
+            }
+
+            drawFrame(ctx, width, height, bgImg, ayah.text, opacity);
+            requestAnimationFrame(draw);
+          };
+          draw();
+        });
+
+        totalTimeMs += durationMs;
+      }
+
+      // Stop recording
+      recorder.stop();
+      await new Promise<void>((resolve) => {
+        recorder.onstop = () => resolve();
+      });
+
+      setProgress(88);
+      setStatusMessage('جاري تحويل الفيديو...');
+
+      // Create webm blob
+      const webmBlob = new Blob(chunks, { type: mimeType });
+
+      // Use FFmpeg to convert to mp4
+      const loaded = await loadFFmpeg();
+      if (!loaded) {
+        // Still offer the webm
+        const url = URL.createObjectURL(webmBlob);
+        setVideoUrl(url);
+        setProgress(100);
+        setStatusMessage('تم (بدون تحويل MP4) ✅');
+        setIsGenerating(false);
+        return;
+      }
+
+      const ffmpeg = ffmpegRef.current!;
+      const webmData = await fetchFile(webmBlob);
+      await ffmpeg.writeFile('input.webm', webmData);
+
+      setStatusMessage('جاري التحويل إلى MP4...');
+      setProgress(92);
 
       await ffmpeg.exec([
-        ...videoInput.split(' '),
-        ...Array.from({ length: segments.length }, (_, i) => `-i audio_${i}.mp3`).join(' ').split(' '),
-        '-filter_complex', complexFilter,
-        '-map', '0:v',
-        '-map', '[outa]',
+        '-i', 'input.webm',
         '-c:v', 'libx264',
         '-preset', 'ultrafast',
         '-crf', '23',
         '-c:a', 'aac',
         '-b:a', '128k',
-        '-shortest',
+        '-movflags', '+faststart',
         '-y',
         'output.mp4',
       ]);
 
-      setProgress(95);
-      setStatusMessage('جاري تجهيز الفيديو للتحميل...');
+      setProgress(97);
+      setStatusMessage('جاري تجهيز الفيديو...');
 
-      // Read output
       const outputData = await ffmpeg.readFile('output.mp4');
       const outputArray = outputData instanceof Uint8Array ? outputData : new TextEncoder().encode(String(outputData));
-      // @ts-expect-error - FFmpeg types are not perfectly aligned
       const outputBlob = new Blob([outputArray], { type: 'video/mp4' });
       const url = URL.createObjectURL(outputBlob);
-      
+
       setVideoUrl(url);
       setProgress(100);
       setStatusMessage('تم بنجاح! ✅');
+
+      audioContext.close();
 
     } catch (err: any) {
       console.error('Generation error:', err);
@@ -505,7 +630,7 @@ export default function Home() {
             {/* Preview area */}
             <div className="glass rounded-2xl p-6">
               <h2 className="text-lg font-semibold mb-4">معاينة مباشرة</h2>
-              
+
               {videoUrl ? (
                 <video
                   src={videoUrl}
