@@ -60,22 +60,53 @@ export async function fetchAyahs(
 }
 
 export async function fetchAyahDuration(audioUrl: string): Promise<number> {
+  // Use fetch + AudioContext for more reliable duration detection
+  // with a timeout fallback
   return new Promise((resolve) => {
-    const audio = new Audio();
-    
-    const onLoadedMetadata = () => {
-      resolve(audio.duration * 1000);
-      audio.removeEventListener('loadedmetadata', onLoadedMetadata);
-    };
-    
-    const onError = () => {
-      resolve(3000);
-      audio.removeEventListener('error', onError);
-    };
+    const timeout = setTimeout(() => {
+      // Default duration based on typical ayah length
+      resolve(5000);
+    }, 10000); // 10 second timeout
 
-    audio.addEventListener('loadedmetadata', onLoadedMetadata);
-    audio.addEventListener('error', onError);
-    audio.src = audioUrl;
+    // Try fetch-based approach first (more reliable in headless)
+    fetch(audioUrl)
+      .then(response => {
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        return response.arrayBuffer();
+      })
+      .then(arrayBuffer => {
+        // Create a temporary audio context to get duration
+        const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+        return ctx.decodeAudioData(arrayBuffer).then(audioBuffer => {
+          const duration = audioBuffer.duration * 1000;
+          ctx.close();
+          clearTimeout(timeout);
+          resolve(duration);
+        });
+      })
+      .catch(() => {
+        // Fallback: try Audio element
+        const audio = new Audio();
+        audio.crossOrigin = 'anonymous';
+
+        const onLoadedMetadata = () => {
+          clearTimeout(timeout);
+          resolve(audio.duration * 1000);
+          audio.removeEventListener('loadedmetadata', onLoadedMetadata);
+          audio.removeEventListener('error', onError);
+        };
+
+        const onError = () => {
+          clearTimeout(timeout);
+          resolve(5000);
+          audio.removeEventListener('loadedmetadata', onLoadedMetadata);
+          audio.removeEventListener('error', onError);
+        };
+
+        audio.addEventListener('loadedmetadata', onLoadedMetadata);
+        audio.addEventListener('error', onError);
+        audio.src = audioUrl;
+      });
   });
 }
 

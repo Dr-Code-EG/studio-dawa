@@ -298,15 +298,38 @@ export default function Home() {
         setStatusMessage(`جاري رسم الآية ${i + 1} من ${audioData.length}...`);
         setProgress(50 + (i / audioData.length) * 35);
 
-        // Fetch and play audio
-        const audioResponse = await fetch(ayah.url);
-        const audioBuffer = await audioResponse.arrayBuffer();
-        const decodedAudio = await audioContext.decodeAudioData(audioBuffer);
+        // Fetch audio with error handling
+        let decodedAudio: AudioBuffer | null = null;
+        try {
+          const audioResponse = await fetch(ayah.url);
+          if (!audioResponse.ok) {
+            throw new Error(`HTTP ${audioResponse.status} for ${ayah.url}`);
+          }
+          const contentType = audioResponse.headers.get('content-type') || '';
+          if (!contentType.includes('audio') && !contentType.includes('octet-stream')) {
+            // Might be an error page
+            const text = await audioResponse.text();
+            throw new Error(`Unexpected content-type: ${contentType}, response: ${text.substring(0, 100)}`);
+          }
+          const audioBuffer = await audioResponse.arrayBuffer();
+          
+          // Ensure audio context is running
+          if (audioContext.state === 'suspended') {
+            await audioContext.resume();
+          }
+          
+          decodedAudio = await audioContext.decodeAudioData(audioBuffer);
+        } catch (decodeErr) {
+          console.warn(`Audio decode failed for ayah ${i + 1}:`, decodeErr);
+          // Continue without audio for this ayah
+        }
 
-        const source = audioContext.createBufferSource();
-        source.buffer = decodedAudio;
-        source.connect(dest);
-        source.start(audioContext.currentTime);
+        if (decodedAudio) {
+          const source = audioContext.createBufferSource();
+          source.buffer = decodedAudio;
+          source.connect(dest);
+          source.start(audioContext.currentTime);
+        }
 
         // Draw frames
         const startTime = performance.now();
